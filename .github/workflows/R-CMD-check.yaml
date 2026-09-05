@@ -16,8 +16,33 @@ on:
       - 'pkgdown/**'
       - '.github/workflows/pkgdown.yaml'
   workflow_dispatch:
+    inputs:
+      leg:
+        description: "baseline (uninstrumented) or instrumented (under chalk/curiosity)"
+        type: choice
+        options: [instrumented, baseline]
+        default: instrumented
+      profile:
+        description: "CrashOverride chalk profile"
+        type: string
+        default: curiosity-tests-racecar
+      racecar_run:
+        description: "racecar correlation token, echoed into the run name"
+        type: string
+        default: ""
 
 name: R-CMD-check
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  # The one variable that separates the arms: on baseline, action-checkout
+  # skips its Set up Chalk step entirely.
+  CHALK_ON: ${{ github.event_name == 'workflow_dispatch' && inputs.leg != 'baseline' }}
+
+run-name: "R-CMD-check ${{ inputs.leg || 'push' }} ${{ inputs.racecar_run }}"
 
 jobs:
   R-CMD-check:
@@ -30,8 +55,6 @@ jobs:
       matrix:
         config:
           # testing R release with last shipped pandoc version in RStudio IDE and new pandoc
-          - {os: windows-latest, pandoc: 'latest',  r: 'release'}
-          - {os: macOS-latest,   pandoc: 'latest',  r: 'release'}
           - {os: ubuntu-latest,  pandoc: 'latest',  r: 'release'}
           - {os: ubuntu-latest,  pandoc: 'nightly',    r: 'release'}
           # testing older pandoc versions (rmarkdown requires Pandoc >= 2.8)
@@ -57,9 +80,22 @@ jobs:
 
     permissions:
       actions: read
+      contents: read
+      id-token: write
 
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout code
+        uses: crashappsec/action-checkout@main
+        with:
+          chalk: ${{ env.CHALK_ON }}
+          profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
+          observables_continue_on_error: false
+          lfs: false
+      - name: Assert instrumentation is live
+        if: env.CHALK_ON == 'true'
+        run: |
+          test -n "${CURIOSITY_ROOT:-}" || { echo "::error::CURIOSITY_ROOT unset - observables never installed"; exit 1; }
+          test -S "${CURIOSITY_SOCKET_NAME:?socket name unset}" || { echo "::error::co-hostd socket absent"; exit 1; }
 
       - uses: r-lib/actions/setup-r@v2
         with:
